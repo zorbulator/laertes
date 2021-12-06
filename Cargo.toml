@@ -1,0 +1,13 @@
+[package]
+name = "shakespeare-test"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[[bin]]
+name = "shakespeare-test"
+path = "main.rs"
+
+[dependencies]
+laertes = { path = "laertes" }
