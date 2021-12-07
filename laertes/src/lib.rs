@@ -1,9 +1,10 @@
-use proc_macro::{self, TokenStream, TokenTree::*, Delimiter, token_stream};
+use proc_macro::{self, TokenStream, TokenTree, TokenTree::*, Delimiter, token_stream};
 use quote::{quote, format_ident};
 use std::collections::HashSet;
 
 use std::fs::File;
 use std::io::{self, BufRead};
+use std::iter::Peekable;
 
 
 struct Act {
@@ -25,14 +26,146 @@ fn set_from_wordlist(path: &str) -> HashSet<String> {
     set
 }
 
-fn constant_value(stream: &mut token_stream::IntoIter) -> isize {
-
+fn constant_value(stream: &mut Peekable<token_stream::IntoIter>) -> isize {
+    let nouns = set_from_wordlist("laertes/src/wordlists/nouns.wordlist");
+    let negative_nouns = set_from_wordlist("laertes/src/wordlists/negative_nouns.wordlist");
+    let possessive = HashSet::from(["thine", "thy", "your", "my", "mine"]);
+    
     let mut total = 1;
     while let Some(Ident(id)) = stream.next() {
+        // ignore possessives like "your sorry little codpiece"
+        if possessive.contains(id.to_string().as_str()) {
+            continue;
+        }
+
+        if nouns.contains(&id.to_string()) {
+            if negative_nouns.contains(&id.to_string()) {
+                total *= -1;
+            }
+            return total;
+        }
+
+        total *= 2;
     }
 
     total
 }
+
+// takes the stream and the characters and evaluates a whole expression
+fn evaluate_expression(stream: &mut Peekable<token_stream::IntoIter>, speaking: &str, other: &str) -> proc_macro2::TokenStream {
+    // "the" indicates some kind of function like "
+    if let Some(Ident(first_ident)) = stream.peek() {
+        let first_word = first_ident.to_string();
+
+        // ignore "a" in case someone writes something like "you are as stupid as a half-witted coward!"
+        if first_word == "a" {
+            stream.next();
+            return evaluate_expression(stream, speaking, other);
+        }
+
+        if first_word == "twice" {
+            let arg = evaluate_expression(stream, speaking, other);
+            return quote!(((#arg) * 2)).into();
+        }
+
+        let second_person_reflexive = HashSet::from(["thyself", "yourself"]);
+
+        if second_person_reflexive.contains(first_word.as_str()) {
+            let ident = format_ident!("{}", &other);
+            return proc_macro2::TokenTree::Ident(ident).into();
+        }
+
+        // the most useful HashSet of all time
+        let first_person_reflexive = HashSet::from(["myself"]);
+
+        if first_person_reflexive.contains(first_word.as_str()) {
+            let ident = format_ident!("{}", &speaking);
+            return proc_macro2::TokenTree::Ident(ident).into();
+        }
+
+        // "the" indicates this is some kind of function like "the difference between thyself and Hamlet"
+        if first_word == "the" {
+            stream.next();
+            let operation = stream.next().expect("missing operation").to_string();
+            let second_word = stream.next().expect("missing second word of operation").to_string();
+
+
+            match operation.as_str() {
+                "cube" => {
+                    assert_eq!(second_word, "of", "the word after 'cube' must be 'of'");
+                    let arg = evaluate_expression(stream, speaking, other);
+                    return quote!((#arg).pow(3)).into();
+                },
+                "difference" => {
+                    assert_eq!(second_word, "between", "the word after 'difference' must be 'between'");
+                    let arg1 = evaluate_expression(stream, speaking, other);
+                    assert_eq!(stream.next().expect("expected 'and' to separate arguments but got nothing").to_string(), "and", "arguments must be separated by 'and'");
+                    let arg2 = evaluate_expression(stream, speaking, other);
+                    return quote!(((#arg1) - (#arg2))).into();
+                },
+                "factorial" => {
+                    assert_eq!(second_word, "of", "the word after 'factorial' must be 'of'");
+                    let arg = evaluate_expression(stream, speaking, other);
+                    return quote!(((1..=#arg).product())).into();
+                },
+                "product" => {
+                    assert_eq!(second_word, "of", "the word after 'product' must be 'of'");
+                    let arg1 = evaluate_expression(stream, speaking, other);
+                    assert_eq!(stream.next().expect("expected 'and' to separate arguments but got nothing").to_string(), "and", "arguments must be separated by 'and'");
+                    let arg2 = evaluate_expression(stream, speaking, other);
+                    return quote!(((#arg1) * (#arg2))).into();
+                },
+                "quotient" => {
+                    assert_eq!(second_word, "between", "the word after 'quotient' must be 'between'");
+                    let arg1 = evaluate_expression(stream, speaking, other);
+                    assert_eq!(stream.next().expect("expected 'and' to separate arguments but got nothing").to_string(), "and", "arguments must be separated by 'and'");
+                    let arg2 = evaluate_expression(stream, speaking, other);
+                    return quote!(((#arg1) / (#arg2))).into();
+                },
+                // original is "remainder of the quotient between"
+                // this is a breaking change but that just sounds bad and is more than 2 words
+                "modulus" => {
+                    assert_eq!(second_word, "of", "the word after 'modulus' must be 'of'");
+                    let arg1 = evaluate_expression(stream, speaking, other);
+                    assert_eq!(stream.next().expect("expected 'and' to separate arguments but got nothing").to_string(), "and", "arguments must be separated by 'and'");
+                    let arg2 = evaluate_expression(stream, speaking, other);
+                    return quote!(((#arg1) % (#arg2))).into();
+                },
+                "square" => {
+                    assert_eq!(second_word, "of", "the word after 'square' must be 'of'");
+                    let arg = evaluate_expression(stream, speaking, other);
+                    return quote!((#arg).pow(2)).into();
+                },
+                // another change to a single word
+                "root" => {
+                    assert_eq!(second_word, "of", "the word after 'square' must be 'of'");
+                    let arg = evaluate_expression(stream, speaking, other);
+                    return quote!((#arg).sqrt()).into();
+                },
+                "sum" => {
+                    assert_eq!(second_word, "of", "the word after 'sum' must be 'of'");
+                    let arg1 = evaluate_expression(stream, speaking, other);
+                    assert_eq!(stream.next().expect("expected 'and' to separate arguments but got nothing").to_string(), "and", "arguments must be separated by 'and'");
+                    let arg2 = evaluate_expression(stream, speaking, other);
+                    return quote!(((#arg1) + (#arg2))).into();
+                },
+                "xor" => {
+                    assert_eq!(second_word, "of", "the word after 'xor' must be 'of'");
+                    let arg1 = evaluate_expression(stream, speaking, other);
+                    assert_eq!(stream.next().expect("expected 'and' to separate arguments but got nothing").to_string(), "and", "arguments must be separated by 'and'");
+                    let arg2 = evaluate_expression(stream, speaking, other);
+                    return quote!(((#arg1) ^ (#arg2))).into();
+                },
+                _ => { panic!("invalid operation: {}", operation); }
+            }
+        }
+    }
+
+    // if it's not anything else, it's a regular constant
+    let value = constant_value(stream);
+    quote!(#value).into()
+}
+
 
 #[proc_macro]
 pub fn shakespeare(input: TokenStream) -> TokenStream {
@@ -41,8 +174,9 @@ pub fn shakespeare(input: TokenStream) -> TokenStream {
 
     // word lists
     let character_names = set_from_wordlist("laertes/src/wordlists/character.wordlist");
-    dbg!(&character_names);
-
+    let second_person = HashSet::from(["thee", "thou", "you"]);
+    let be = HashSet::from(["am", "are", "art", "be", "is"]);
+    
     loop {
         if let Ident(next) = input.peek().expect("expected character name or first act!") {
             dbg!(next);
@@ -81,12 +215,16 @@ pub fn shakespeare(input: TokenStream) -> TokenStream {
     // the characters on stage
     let mut stage: HashSet<String> = HashSet::new();
 
+    // the character currently talking; hopefully this always has a value
+    let mut current_character = String::new();
+
     // keep going until you're out of identifiers
     while let Some(tree) = input.next() {
         if let Ident(id) = tree {
+            dbg!(id);
             // get the first word of the statement
-            let first = id.to_string().to_lowercase();
-            if first == "act" {
+            let first = id.to_string();
+            if first == "Act" {
                 act_title.clear();
                 // ignore the act number
                 while let Some(Ident(_)) = input.next() {}
@@ -100,7 +238,7 @@ pub fn shakespeare(input: TokenStream) -> TokenStream {
                 acts.push(Act { name: act_title.clone(), scenes: Vec::new() });
             }
 
-            if first == "scene" {
+            if first == "Scene" {
                 let mut scene_title = String::new();
                 while let Some(Ident(_)) = input.next() {}
                 while let Some(Ident(word)) = input.next() {
@@ -115,15 +253,62 @@ pub fn shakespeare(input: TokenStream) -> TokenStream {
                 let scene_ident = format_ident!("a{}s{}", act_num, scene_num);
                 scenes.push((scene_ident, quote!()));
             }
+            // character name; this means a new character is talking
+            if character_names.contains(&first) {
+                let mut name = first.clone();
+                while let Some(Ident(word)) = input.next() {
+                    name.push_str(&word.to_string());
+                }
+                assert!(stage.contains(&name), "character not on stage: {}", name);
+            }
+
+            // start with you/thou means this is an assignment
+            if second_person.contains(first.as_str()) {
+                // this statement is like "you are as _ as a"
+                if be.contains(&input.peek().expect("unexpected end").to_string().as_str()) {
+                    input.next(); // get rid of the "are"
+                    assert_eq!(input.next().expect("unexpected end").to_string(), "as".to_string(), "assignment must have 'as' twice like 'you are as _ as _");
+                    input.next(); // get rid of the adjective
+                    assert_eq!(input.next().expect("unexpected end").to_string(), "as".to_string(), "assignment must have 'as' twice like 'you are as _ as _");
+                }
+                // get all the characters other than the current one
+                let just_me = HashSet::from([current_character.clone()]);
+                let mut other_characters = stage.difference(&just_me);
+                assert_eq!(other_characters.clone().collect::<HashSet<&String>>().len(), 1, "only two characters can be on the stage to use {}", &first);
+                let other_character = other_characters.next().expect("no other character on stage for assignment!");
+                let new_value = evaluate_expression(&mut input, &current_character, &other_character);
+                let character_ident = format_ident!("{}", current_character);
+                let latest_scene = scenes.len() - 1;
+                scenes[latest_scene].1.extend(quote!(
+                    #character_ident = #new_value;
+                ));
+                dbg!(&scenes[latest_scene]);
+            }
         }
 
+        // brackets used for stuff like enter/exit
         else if let Group(grp) = tree {
             assert!(grp.delimiter() == Delimiter::Bracket, "Brackets are the only allowed grouping!");
 
-            let mut direction = grp.stream().into_iter();
+            let mut direction = grp.stream().into_iter().peekable();
             let direction_type = direction.next().expect("can't get stage direction!").to_string();
 
-            if direction_type == "Enter" {
+            if direction_type == "Enter" || direction_type == "Exit" || direction_type == "Exeunt" {
+                // are there character names?
+                if let None = direction.peek() {
+                    match direction_type.as_str() {
+                        "Exeunt" => {
+                            // exeunt with no characters; exit all and continue to next loop
+                            stage.clear();
+                            dbg!(&stage);
+                            continue;
+                        }
+                        _ => {
+                            panic!("Enter or exit with no characters! Use Exeunt to exit all");
+                        }
+                    }
+                }
+                
                 let mut name = String::new();
                 while let Some(tree) = direction.next() {
                     if let Ident(id) = tree {
@@ -134,10 +319,31 @@ pub fn shakespeare(input: TokenStream) -> TokenStream {
                         }
                     }
 
-                    stage.insert(name.clone());
+                    // only runs if this isn't a name
+                    match direction_type.as_str() {
+                        "Enter" => {
+                            stage.insert(name.clone());
+                        },
+                        "Exeunt" => {
+                            stage.remove(&name);
+                        },
+                        "Exit" => {
+                            panic!("can only exit one character; did you mean Exeunt?");
+                        },
+                        _ => { unreachable!() }
+                    }
                     name.clear();
                 }
-                stage.insert(name.clone());
+                // what to do with the last name
+                match direction_type.as_str() {
+                    "Enter" => {
+                        stage.insert(name.clone());
+                    },
+                    // if it's not enter it's exit or exeunt
+                    _ => {
+                        stage.remove(&name);
+                    },
+                }
                 dbg!(&stage);
             }
         }

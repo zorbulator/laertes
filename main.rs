@@ -13,8 +13,9 @@ fn main() {
         Scene II: another scene.
         Scene III: the last one.
 
-        [Enter Romeo]
         [Enter Hamlet and The Ghost]
+        Hamlet: You lying stupid fatherless big smelly half-witted coward!
+        [Exeunt]
 
     };
 }
