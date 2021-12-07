@@ -29,12 +29,17 @@ fn set_from_wordlist(path: &str) -> HashSet<String> {
 fn constant_value(stream: &mut Peekable<token_stream::IntoIter>) -> isize {
     let nouns = set_from_wordlist("laertes/src/wordlists/nouns.wordlist");
     let negative_nouns = set_from_wordlist("laertes/src/wordlists/negative_nouns.wordlist");
-    let possessive = HashSet::from(["thine", "thy", "your", "my", "mine"]);
+    let possessive = HashSet::from(["thine", "thy", "your", "my", "mine", "his", "her"]);
     
     let mut total = 1;
     while let Some(Ident(id)) = stream.next() {
         // ignore possessives like "your sorry little codpiece"
         if possessive.contains(id.to_string().as_str()) {
+            continue;
+        }
+
+        // also ignore a/an
+        if id.to_string() == "a" || id.to_string() == "an" {
             continue;
         }
 
@@ -64,6 +69,7 @@ fn evaluate_expression(stream: &mut Peekable<token_stream::IntoIter>, speaking: 
         }
 
         if first_word == "twice" {
+            stream.next();
             let arg = evaluate_expression(stream, speaking, other);
             return quote!(((#arg) * 2)).into();
         }
@@ -71,6 +77,7 @@ fn evaluate_expression(stream: &mut Peekable<token_stream::IntoIter>, speaking: 
         let second_person_reflexive = HashSet::from(["thyself", "yourself"]);
 
         if second_person_reflexive.contains(first_word.as_str()) {
+            stream.next(); // get rid of the word
             let ident = format_ident!("{}", &other);
             return proc_macro2::TokenTree::Ident(ident).into();
         }
@@ -79,7 +86,20 @@ fn evaluate_expression(stream: &mut Peekable<token_stream::IntoIter>, speaking: 
         let first_person_reflexive = HashSet::from(["myself"]);
 
         if first_person_reflexive.contains(first_word.as_str()) {
+            stream.next();
             let ident = format_ident!("{}", &speaking);
+            return proc_macro2::TokenTree::Ident(ident).into();
+        }
+
+        let character_names = set_from_wordlist("laertes/src/wordlists/character.wordlist");
+
+        if character_names.contains(&first_word) {
+            let mut name = String::from(&first_word);
+            stream.next();
+            while character_names.contains(&stream.peek().expect("unexpected end").to_string()) {
+                name.push_str(&stream.next().unwrap().to_string());
+            }
+            let ident = format_ident!("{}", &name);
             return proc_macro2::TokenTree::Ident(ident).into();
         }
 
@@ -179,7 +199,6 @@ pub fn shakespeare(input: TokenStream) -> TokenStream {
     
     loop {
         if let Ident(next) = input.peek().expect("expected character name or first act!") {
-            dbg!(next);
             if next.to_string().to_lowercase() == "act" {
                 break;
             }
@@ -189,13 +208,12 @@ pub fn shakespeare(input: TokenStream) -> TokenStream {
                 name.push_str(&word.to_string());
             }
             let name_ident = format_ident!("{}", name);
-            out.extend(quote!(let #name_ident: isize = 0;));
+            out.extend(quote!(let mut #name_ident: isize = 0;));
             let stack_ident = format_ident!("{}_stack", name);
-            out.extend(quote!(let #stack_ident: Vec<isize> = Vec::new();));
+            out.extend(quote!(let mut #stack_ident: Vec<isize> = Vec::new();));
             // get rid of description
             while let Some(Ident(word)) = input.next() {}
         } else {
-            dbg!(input.peek());
             panic!("unexpected non-identifier instead of character name or first act!");
         }
     }
@@ -221,7 +239,6 @@ pub fn shakespeare(input: TokenStream) -> TokenStream {
     // keep going until you're out of identifiers
     while let Some(tree) = input.next() {
         if let Ident(id) = tree {
-            dbg!(id);
             // get the first word of the statement
             let first = id.to_string();
             if first == "Act" {
@@ -260,29 +277,72 @@ pub fn shakespeare(input: TokenStream) -> TokenStream {
                     name.push_str(&word.to_string());
                 }
                 assert!(stage.contains(&name), "character not on stage: {}", name);
+                current_character = name;
             }
 
             // start with you/thou means this is an assignment
-            if second_person.contains(first.as_str()) {
-                // this statement is like "you are as _ as a"
-                if be.contains(&input.peek().expect("unexpected end").to_string().as_str()) {
+            if second_person.contains(first.to_lowercase().as_str()) {
+
+                let peek = &input.peek().expect("unexpected end").to_string();
+
+                // "You lying stupid fatherless big smelly half-witted coward!" and
+                // "Thou art the sum of a fine Lord and a summer day"
+                // are both valid sentences, so just ignore the "are"/"art"
+                if be.contains(peek.as_str()) {
                     input.next(); // get rid of the "are"
+                }
+
+                let peek = &input.peek().expect("unexpected end").to_string();
+
+                if peek == "as" {
                     assert_eq!(input.next().expect("unexpected end").to_string(), "as".to_string(), "assignment must have 'as' twice like 'you are as _ as _");
                     input.next(); // get rid of the adjective
                     assert_eq!(input.next().expect("unexpected end").to_string(), "as".to_string(), "assignment must have 'as' twice like 'you are as _ as _");
                 }
+
+                let peek = &input.peek().expect("unexpected end").to_string();
+
+                // also ignore a/an
+                if peek == "a" || peek == "an" {
+                    input.next();
+                }
+
                 // get all the characters other than the current one
                 let just_me = HashSet::from([current_character.clone()]);
                 let mut other_characters = stage.difference(&just_me);
-                assert_eq!(other_characters.clone().collect::<HashSet<&String>>().len(), 1, "only two characters can be on the stage to use {}", &first);
+                assert_eq!(other_characters.clone().collect::<HashSet<&String>>().len(), 1, "two characters must be on the stage to use {}", &first);
                 let other_character = other_characters.next().expect("no other character on stage for assignment!");
                 let new_value = evaluate_expression(&mut input, &current_character, &other_character);
-                let character_ident = format_ident!("{}", current_character);
+                let other_ident = format_ident!("{}", other_character);
                 let latest_scene = scenes.len() - 1;
                 scenes[latest_scene].1.extend(quote!(
-                    #character_ident = #new_value;
+                    #other_ident = #new_value;
                 ));
-                dbg!(&scenes[latest_scene]);
+            }
+
+            // "Open your mind" == print numerical value, but we'll allow anything starting with "open"
+            // "Speak your mind" == print unicode value
+            if first == "Open" || first == "Speak" {
+                // ignore the rest of the identifiers
+                while let Some(Ident(_)) = input.next() {}
+
+                // get all the characters other than the current one
+                let just_me = HashSet::from([current_character.clone()]);
+                let mut other_characters = stage.difference(&just_me);
+                assert_eq!(other_characters.clone().collect::<HashSet<&String>>().len(), 1, "two characters must be on the stage to use {}", &first);
+                let other_character = other_characters.next().expect("no other character on stage for assignment!");
+                let other_ident = format_ident!("{}", other_character);
+                let latest_scene = scenes.len() - 1;
+
+                if first == "Open" {
+                    scenes[latest_scene].1.extend(quote!(
+                        println!("{}", #other_ident);
+                    ));
+                } else if first == "Speak" {
+                    scenes[latest_scene].1.extend(quote!(
+                        print!("{}", std::char::from_u32(#other_ident.abs() as u32).expect(&format!("Invalid character: {} has value {}", "#other_ident", #other_ident)));
+                    ));
+                }
             }
         }
 
@@ -300,7 +360,6 @@ pub fn shakespeare(input: TokenStream) -> TokenStream {
                         "Exeunt" => {
                             // exeunt with no characters; exit all and continue to next loop
                             stage.clear();
-                            dbg!(&stage);
                             continue;
                         }
                         _ => {
@@ -344,7 +403,6 @@ pub fn shakespeare(input: TokenStream) -> TokenStream {
                         stage.remove(&name);
                     },
                 }
-                dbg!(&stage);
             }
         }
     }
