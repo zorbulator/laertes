@@ -1,4 +1,5 @@
-use proc_macro::{self, TokenStream, TokenTree, TokenTree::*, Delimiter, token_stream};
+use std::cmp::Ordering;
+use proc_macro::{self, TokenStream, TokenTree::*, Delimiter, token_stream};
 use quote::{quote, format_ident};
 use std::collections::HashSet;
 
@@ -30,6 +31,7 @@ fn constant_value(stream: &mut Peekable<token_stream::IntoIter>) -> isize {
     let nouns = set_from_wordlist("laertes/src/wordlists/nouns.wordlist");
     let negative_nouns = set_from_wordlist("laertes/src/wordlists/negative_nouns.wordlist");
     let possessive = HashSet::from(["thine", "thy", "your", "my", "mine", "his", "her"]);
+    let zero = HashSet::from(["zero", "nothing"]);
     
     let mut total = 1;
     while let Some(Ident(id)) = stream.next() {
@@ -48,6 +50,10 @@ fn constant_value(stream: &mut Peekable<token_stream::IntoIter>) -> isize {
                 total *= -1;
             }
             return total;
+        }
+
+        if zero.contains(id.to_string().as_str()) {
+            return 0;
         }
 
         total *= 2;
@@ -74,7 +80,7 @@ fn evaluate_expression(stream: &mut Peekable<token_stream::IntoIter>, speaking: 
             return quote!(((#arg) * 2)).into();
         }
 
-        let second_person_reflexive = HashSet::from(["thyself", "yourself"]);
+        let second_person_reflexive = HashSet::from(["thyself", "yourself", "you", "thou"]);
 
         if second_person_reflexive.contains(first_word.as_str()) {
             stream.next(); // get rid of the word
@@ -82,8 +88,7 @@ fn evaluate_expression(stream: &mut Peekable<token_stream::IntoIter>, speaking: 
             return proc_macro2::TokenTree::Ident(ident).into();
         }
 
-        // the most useful HashSet of all time
-        let first_person_reflexive = HashSet::from(["myself"]);
+        let first_person_reflexive = HashSet::from(["me", "myself", "I"]);
 
         if first_person_reflexive.contains(first_word.as_str()) {
             stream.next();
@@ -160,7 +165,7 @@ fn evaluate_expression(stream: &mut Peekable<token_stream::IntoIter>, speaking: 
                 "root" => {
                     assert_eq!(second_word, "of", "the word after 'square' must be 'of'");
                     let arg = evaluate_expression(stream, speaking, other);
-                    return quote!((#arg).sqrt()).into();
+                    return quote!(((#arg as f64).sqrt() as isize)).into();
                 },
                 "sum" => {
                     assert_eq!(second_word, "of", "the word after 'sum' must be 'of'");
@@ -196,6 +201,8 @@ pub fn shakespeare(input: TokenStream) -> TokenStream {
     let character_names = set_from_wordlist("laertes/src/wordlists/character.wordlist");
     let second_person = HashSet::from(["thee", "thou", "you"]);
     let be = HashSet::from(["am", "are", "art", "be", "is"]);
+    let positive_comparisons = set_from_wordlist("laertes/src/wordlists/positive_comparative.wordlist");
+    let negative_comparisons = set_from_wordlist("laertes/src/wordlists/negative_comparative.wordlist");
     
     loop {
         if let Ident(next) = input.peek().expect("expected character name or first act!") {
@@ -212,7 +219,7 @@ pub fn shakespeare(input: TokenStream) -> TokenStream {
             let stack_ident = format_ident!("{}_stack", name);
             out.extend(quote!(let mut #stack_ident: Vec<isize> = Vec::new();));
             // get rid of description
-            while let Some(Ident(word)) = input.next() {}
+            while let Some(Ident(_)) = input.next() {}
         } else {
             panic!("unexpected non-identifier instead of character name or first act!");
         }
@@ -317,14 +324,21 @@ pub fn shakespeare(input: TokenStream) -> TokenStream {
                 let latest_scene = scenes.len() - 1;
                 scenes[latest_scene].1.extend(quote!(
                     #other_ident = #new_value;
+                    //dbg!(&#other_ident);
                 ));
             }
 
             // "Open your mind" == print numerical value, but we'll allow anything starting with "open"
             // "Speak your mind" == print unicode value
-            if first == "Open" || first == "Speak" {
+            if first == "Open" || first == "Speak" || first == "Listen" {
+                // "open your mind" reads a character so check if the phrase contains "mind"
+                let mut contains_mind = false;
                 // ignore the rest of the identifiers
-                while let Some(Ident(_)) = input.next() {}
+                while let Some(Ident(id)) = input.next() {
+                    if id.to_string() == "mind" {
+                        contains_mind = true;
+                    }
+                }
 
                 // get all the characters other than the current one
                 let just_me = HashSet::from([current_character.clone()]);
@@ -335,12 +349,201 @@ pub fn shakespeare(input: TokenStream) -> TokenStream {
                 let latest_scene = scenes.len() - 1;
 
                 if first == "Open" {
-                    scenes[latest_scene].1.extend(quote!(
-                        println!("{}", #other_ident);
-                    ));
+                    if contains_mind {
+                        scenes[latest_scene].1.extend(quote!(
+                            let mut line = String::new();
+                            std::io::stdin().read_line(&mut line).expect("failed to read character");
+                            let c = line.chars().next().expect("got line with no characters!") as isize;
+                            #other_ident = c;
+                        ));
+                    } else {
+                        scenes[latest_scene].1.extend(quote!(
+                            println!("{}", #other_ident);
+                        ));
+                    }
                 } else if first == "Speak" {
                     scenes[latest_scene].1.extend(quote!(
                         print!("{}", std::char::from_u32(#other_ident.abs() as u32).expect(&format!("Invalid character: {} has value {}", "#other_ident", #other_ident)));
+                    ));
+                } else if first == "Listen" {
+                    scenes[latest_scene].1.extend(quote!(
+                        use std::io::BufRead;
+                        let num: isize = std::io::stdin()
+                            .lock()
+                            .lines()
+                            .next()
+                            .expect("stdin should be available")
+                            .expect("couldn't read from stdin")
+                            .trim()
+                            .parse()
+                            .expect("input was not an integer");
+                        #other_ident = num;
+                    ));
+                }
+            }
+
+            // "if so" / "if not" for conditionals
+            if first == "If" {
+                let latest_scene = scenes.len() - 1;
+                let next = input.next().expect("unexpected stop").to_string();
+
+                if next == "so" {
+                    scenes[latest_scene].1.extend(quote!(
+                        final_cond = cond;
+                    ));
+                } else if next == "not" {
+                    scenes[latest_scene].1.extend(quote!(
+                        final_cond = !cond;
+                    ));
+                } else {
+                    panic!("'If' must be followed by 'so' or 'not'");
+                }
+
+                assert!(matches!(input.next().expect("unexpected stop"), Punct(_)), "If {} must be followed by punctuation", &next);
+            }
+
+            // comparison like "am I better than you?"
+            if be.contains(first.to_lowercase().as_str()) {
+                let just_me = HashSet::from([current_character.clone()]);
+                let mut other_characters = stage.difference(&just_me);
+                assert_eq!(other_characters.clone().collect::<HashSet<&String>>().len(), 1, "two characters must be on the stage to use {}", &first);
+                let other_character = other_characters.next().expect("no other character on stage for assignment!");
+                let first_value = evaluate_expression(&mut input, &current_character, &other_character);
+                dbg!(&first_value);
+                // the type of comparison to check for
+                let test: Ordering;
+                let comparison_word = input.next().expect("unexpected stop").to_string();
+
+                if comparison_word == "as" {
+                    // like "are you as _ as _?"
+                    input.next();
+                    assert_eq!(input.next().expect("unexpected stop").to_string(), "as");
+                    test = Ordering::Equal;
+                } else if negative_comparisons.contains(&comparison_word) {
+                    // get rid of word like "than"
+                    input.next();
+                    test = Ordering::Less;
+                } else if positive_comparisons.contains(&comparison_word) {
+                    input.next();
+                    test = Ordering::Greater;
+                } else {
+                    dbg!(&comparison_word);
+                    dbg!(&first);
+                    panic!("invalid comparison");
+                }
+
+                let second_value = evaluate_expression(&mut input, &current_character, &other_character);
+
+                let latest_scene = scenes.len() - 1;
+
+                let test_ident = match test {
+                    Ordering::Equal   => quote!(std::cmp::Ordering::Equal),
+                    Ordering::Less    => quote!(std::cmp::Ordering::Less),
+                    Ordering::Greater => quote!(std::cmp::Ordering::Greater)
+                };
+
+                scenes[latest_scene].1.extend(quote!(
+                    cond = (#first_value).cmp(&(#second_value)) == #test_ident;
+                ));
+
+                // there's still punctuation at the end
+                //assert!(matches!(input.next().expect("unexpected stop"), Punct(_)), "Condition must be followed by punctuation");
+
+            }
+
+            // "let us" / "we shall" are gotos
+            if first.to_lowercase() == "let" || first.to_lowercase() == "we" {
+                // get rid of three words like "us proceed to" or "shall return to"
+                // I could check this, but maybe people want to be creative and change the words
+                for _ in 0..3 { input.next(); }
+
+                let latest_scene = scenes.len() - 1;
+
+                let peek = input.peek().expect("unexpected stop").to_string().to_lowercase();
+
+                // goto another scene/act by number
+                if peek == "scene" || peek == "act" {
+                    input.next();
+                    let roman_numeral = input.next().expect("unexpected stop").to_string();
+                    let jump_number: u32 = decode_roman_numeral(&roman_numeral);
+                    let scene_ident;
+
+                    // if it's a scene then jump to the same act but the same number
+                    if peek == "scene" {
+                        scene_ident = format_ident!("a{}s{}", act_num, jump_number);
+                    } else {
+                        // if it's an act then go to scene 1
+                        scene_ident = format_ident!("a{}s{}", jump_number, 1u32);
+                    }
+
+                    scenes[latest_scene].1.extend(quote!(
+                        if (final_cond) {
+                            current_scene = Scene::#scene_ident;
+                            continue;
+                        }
+                        final_cond = true;
+                    ));
+
+                    input.next(); // get rid of punctuation
+                } else {
+                    // otherwise it's the actual title of a scene
+                    
+                    let mut jump_to = String::new();
+                    while let Some(Ident(word)) = input.next() {
+                        // get the act title but only alphabetic characters and make them lowercase
+                        jump_to.push_str(&word.to_string().to_lowercase().replace(|c: char| !c.is_alphabetic(), ""));
+                    }
+
+                    // act/scene to jump to
+                    let (mut a, mut s) = (0, 0);
+                    'outer: for (act_index, act) in acts.iter().enumerate() {
+                        if act.name == jump_to {
+                            a = act_index + 1;
+                            s = 1;
+                            break 'outer;
+                        }
+                        for (scene_index, scene_title) in act.scenes.iter().enumerate() {
+                            if scene_title == &jump_to {
+                                a = act_index + 1;
+                                s = scene_index + 1;
+                                break 'outer;
+                            }
+                        }
+                    }
+
+                    assert_ne!(a, 0, "act or scene name to jump to didn't match");
+                    let scene_ident = format_ident!("a{}s{}", a, s);
+
+                    scenes[latest_scene].1.extend(quote!(
+                        if final_cond {
+                            current_scene = Scene::#scene_ident;
+                            continue;
+                        }
+                        final_cond = true;
+                    ));
+                }
+            }
+
+            if first == "Remember" || first == "Recall" {
+                let just_me = HashSet::from([current_character.clone()]);
+                let mut other_characters = stage.difference(&just_me);
+                assert_eq!(other_characters.clone().collect::<HashSet<&String>>().len(), 1, "two characters must be on the stage to use {}", &first);
+                let other_character = other_characters.next().expect("no other character on stage for assignment!");
+                let other_ident = format_ident!("{}", other_character);
+                let other_stack_ident = format_ident!("{}_stack", other_character);
+                let latest_scene = scenes.len() - 1;
+
+                if first == "Recall" {
+                    scenes[latest_scene].1.extend(quote!(
+                        #other_ident = #other_stack_ident.pop().expect("Tried to pop empty stack!");
+                    ));
+
+                    // the rest doesn't matter
+                    while let Some(Ident(_)) = input.next() {}
+                } else {
+                    let first_value = evaluate_expression(&mut input, &current_character, &other_character);
+                    scenes[latest_scene].1.extend(quote!(
+                        #other_stack_ident.push((#first_value));
                     ));
                 }
             }
@@ -438,6 +641,10 @@ pub fn shakespeare(input: TokenStream) -> TokenStream {
 
     out.extend(quote!(
         let mut current_scene = Scene::a1s1;
+        // the condition from statements like "am I better than you?"
+        let mut cond = true;
+        // the actual condition set by "if so,"
+        let mut final_cond = true;
         loop {
             match current_scene {
                 #body
@@ -455,4 +662,33 @@ pub fn shakespeare(input: TokenStream) -> TokenStream {
     ));
 
     out.into()
+}
+
+struct RomanNumeral {
+    symbol: &'static str,
+    value: u32
+}
+
+ const NUMERALS: [RomanNumeral; 13] = [
+    RomanNumeral {symbol: "M",  value: 1000},
+    RomanNumeral {symbol: "CM", value: 900},
+    RomanNumeral {symbol: "D",  value: 500},
+    RomanNumeral {symbol: "CD", value: 400},
+    RomanNumeral {symbol: "C",  value: 100},
+    RomanNumeral {symbol: "XC", value: 90},
+    RomanNumeral {symbol: "L",  value: 50},
+    RomanNumeral {symbol: "XL", value: 40},
+    RomanNumeral {symbol: "X",  value: 10},
+    RomanNumeral {symbol: "IX", value: 9},
+    RomanNumeral {symbol: "V",  value: 5},
+    RomanNumeral {symbol: "IV", value: 4},
+    RomanNumeral {symbol: "I",  value: 1}
+];
+
+// roman numeral function I just copied from rosettacode.org because I don't want to do it myself
+fn decode_roman_numeral(roman: &str) -> u32 {
+    match NUMERALS.iter().find(|num| roman.starts_with(num.symbol)) {
+        Some(num) => num.value + decode_roman_numeral(&roman[num.symbol.len()..]),
+        None => 0, // if string empty, add nothing
+    }
 }
