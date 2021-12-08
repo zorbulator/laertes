@@ -2,6 +2,8 @@ use laertes::shakespeare;
 
 fn main() {
     shakespeare!{
+        The reversal.
+        
         Hamlet, a stacky man.
         Polonius, who pushes him around till he pops.
 

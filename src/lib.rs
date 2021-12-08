@@ -189,6 +189,9 @@ pub fn shakespeare(input: TokenStream) -> TokenStream {
     let positive_comparisons: HashSet<&str> = HashSet::from_iter(include_str!("wordlists/positive_comparative.wordlist").lines());
     let negative_comparisons: HashSet<&str> = HashSet::from_iter(include_str!("wordlists/negative_comparative.wordlist").lines());
 
+    // go past the title
+    while let Some(Ident(_)) = input.next() {}
+
     loop {
         if let Ident(next) = input.peek().expect("expected character name or first act!") {
             if next.to_string().to_lowercase() == "act" {

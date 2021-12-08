@@ -2,6 +2,8 @@ use laertes::shakespeare;
 
 fn main() {
     shakespeare!{
+        Prime Number Generation.
+
         Rosencrantz, a young man.
         Guildenstern, basically the same person.
         Hamlet, a temporary variable from Denmark.

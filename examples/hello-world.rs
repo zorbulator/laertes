@@ -2,6 +2,8 @@ use laertes::shakespeare;
 
 fn main() {
     shakespeare!{
+        Hello World in Shakespeare.
+        
         Romeo, a young man with a remarkable patience.
         Juliet, a likewise young woman of remarkable grace.
         Ophelia, a remarkable woman much in dispute with Hamlet.
