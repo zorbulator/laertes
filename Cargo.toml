@@ -1,13 +1,13 @@
 [package]
-name = "shakespeare-test"
-version = "0.1.0"
+name = "laertes"
+version = "0.0.1"
 edition = "2021"
 
-[workspace]
-
-[[bin]]
-name = "shakespeare-test"
-path = "main.rs"
+[lib]
+proc-macro = true
 
 [dependencies]
-laertes = { path = "laertes" }
+
+quote = "1.0"
+proc-macro2 = "1.0"
+smallvec = "1.6"
