@@ -6,7 +6,7 @@ An implementation of the [Shakespeare Programming Language](http://shakespearela
 
 ## additions
 
- - allows gotos using scene/act titles inspired by [drsam94/Spl](https://github.com/drsam94/Spl)
+- allows gotos using scene/act titles inspired by [drsam94/Spl](https://github.com/drsam94/Spl)
 
 ## limitations
 
