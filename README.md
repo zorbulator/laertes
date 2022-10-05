@@ -10,9 +10,9 @@ An implementation of the [Shakespeare Programming Language](http://shakespearela
 
 ## limitations
 
- - doesn't allow `'`, `"`, or other grouping characters as Rust requires them to all match
- - hyphenated words like "flirt-gill" don't work as they are interpreted as identifier/punctuation/identifier instead of one identifier
- - multi-word operators like "the remainder of the quotient of" and "square root" have been shortened to a single word "modulus" or "root" because this looks better and makes parsing easier
+- doesn't allow `'`, `"`, or other grouping characters as Rust requires them to all match
+- hyphenated words like "flirt-gill" don't work as they are interpreted as identifier/punctuation/identifier instead of one identifier
+- multi-word operators like "the remainder of the quotient of" and "square root" have been shortened to a single word "modulus" or "root" because this looks better and makes parsing easier
 
 # Usage
 
